@@ -49,7 +49,7 @@ select CITY in "${CITIES[@]}"; do
     [[ -n $CITY ]] && break || echo -e "\033[1;31mНеверный выбор!\033[0m"
 done
 
-TIMEZONE="$REGION/$CITY"
+TIMEZONE="/$REGION/$CITY"
 echo -e "\n\033[1;32mВыбран часовой пояс: \033[1;33m$TIMEZONE\033[0m"
 
 ### Настройки локализации ###
