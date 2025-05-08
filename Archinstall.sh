@@ -1,196 +1,174 @@
 #!/bin/bash
 
-# Проверка на root
+# Arch Linux UEFI Install Script with Cyrillic Support
+# Полноценная поддержка кириллицы в консоли установщика
+
+# Настройка шрифта консоли перед началом работы
+setfont cyr-sun16 2>/dev/null
+
+# Проверка прав root
 if [ "$(id -u)" -ne 0 ]; then
-  echo "Этот скрипт должен запускаться от root!" >&2
-  exit 1
+    echo -e "\n\033[1;31mЭтот скрипт должен запускаться от root!\033[0m" >&2
+    exit 1
 fi
 
-# Функция для отображения прогресс-бара
-progress_bar() {
-    local duration=${1}
-    local columns=$(tput cols)
-    local space=$(( columns - 20 ))
-    local increment=$(( duration / space ))
-    
-    for (( i=0; i<=space; i++ )); do
-        printf "["
-        for (( j=0; j<i; j++ )); do printf "#"; done
-        for (( j=i; j<space; j++ )); do printf " "; done
-        printf "] %d%%\r" $(( (i * 100) / space ))
-        sleep $increment
-    done
-    printf "\n"
-}
+### Выбор диска ###
+echo -e "\n\033[1;32m=== ВЫБОР ДИСКА ===\033[0m"
+echo -e "\033[1;33mДоступные диски:\033[0m"
+lsblk -d -p -o NAME,SIZE,MODEL | grep -v "ROM\|loop\|sr0"
+echo -e "\n\033[1;33mВведите полный путь к диску (например, /dev/sda или /dev/nvme0n1):\033[0m"
+read -p "> " DISK
 
-# Получаем имя диска для установки
-echo "Доступные диски:"
-lsblk -d -o NAME,SIZE,MODEL
-read -p "Введите имя диска для установки (например, nvme0n1 или sda): " DISK
-
-# Проверка на валидность имени диска
-if [ ! -b "/dev/${DISK}" ]; then
-  echo "Ошибка: /dev/${DISK} не существует или не является блочным устройством!" >&2
-  exit 1
-fi
-
-# Разметка диска
-echo "Разметка диска /dev/${DISK}..."
-(
-  echo g      # Создаем новую GPT таблицу
-  echo n      # Раздел EFI
-  echo 1
-  echo
-  echo +512M
-  echo t      # Тип раздела
-  echo 1      # EFI System
-  echo n      # Корневой раздел (Btrfs)
-  echo 2
-  echo
-  echo
-  echo w
-) | fdisk "/dev/${DISK}" &> /dev/null
-
-progress_bar 5
-
-# Форматирование разделов
-echo "Форматирование разделов..."
-EFI_PART="/dev/${DISK}p1"
-ROOT_PART="/dev/${DISK}p2"
-
-mkfs.fat -F32 "$EFI_PART" &> /dev/null
-mkfs.btrfs -f "$ROOT_PART" &> /dev/null
-
-progress_bar 3
-
-# Монтирование Btrfs и создание сабволюмов
-echo "Настройка Btrfs и сабволюмов..."
-mount "$ROOT_PART" /mnt
-
-# Создание сабволюмов
-btrfs subvolume create /mnt/@ &> /dev/null
-btrfs subvolume create /mnt/@home &> /dev/null
-btrfs subvolume create /mnt/@var &> /dev/null
-btrfs subvolume create /mnt/@log &> /dev/null
-btrfs subvolume create /mnt/@pkg &> /dev/null
-btrfs subvolume create /mnt/@.snapshots &> /dev/null
-
-# Размонтируем для правильного монтирования с опциями
-umount /mnt
-
-# Монтируем с правильными опциями
-mount -o noatime,compress=zstd,space_cache=v2,subvol=@ "$ROOT_PART" /mnt
-mkdir -p /mnt/{boot/efi,home,var,var/log,var/cache/pacman/pkg,.snapshots}
-
-mount -o noatime,compress=zstd,space_cache=v2,subvol=@home "$ROOT_PART" /mnt/home
-mount -o noatime,compress=zstd,space_cache=v2,subvol=@var "$ROOT_PART" /mnt/var
-mount -o noatime,compress=zstd,space_cache=v2,subvol=@log "$ROOT_PART" /mnt/var/log
-mount -o noatime,compress=zstd,space_cache=v2,subvol=@pkg "$ROOT_PART" /mnt/var/cache/pacman/pkg
-mount -o noatime,compress=zstd,space_cache=v2,subvol=@.snapshots "$ROOT_PART" /mnt/.snapshots
-
-mount "$EFI_PART" /mnt/boot/efi
-
-echo "Пароль root"
-read -p "Введите пароль :  " password
-clear
-
-echo "Логин пользователя"
-read -p "Введите имя :  " username
-clear
-
-echo "Пароль пользователя"
-read -p "Введите пароль :  " userpassword
-clear
-
-progress_bar 5
-
-# Установка базовой системы
-echo "Установка базовой системы (это может занять некоторое время)..."
-pacstrap /mnt base base-devel linux linux-firmware btrfs-progs &> /dev/null &
-
-# Прогресс-бар для имитации процесса установки
-while kill -0 $! 2>/dev/null; do
-  progress_bar 30
+### Проверка ввода диска ###
+while [ ! -b "$DISK" ]; do
+    echo -e "\033[1;31mОшибка: Устройство $DISK не найдено!\033[0m"
+    read -p "Пожалуйста, введите корректный путь: " DISK
 done
 
-progress_bar 5
+### Определение разделов ###
+if [[ $DISK =~ "nvme" ]]; then
+    EFI_PART="${DISK}p1"
+    ROOT_PART="${DISK}p2"
+else
+    EFI_PART="${DISK}1"
+    ROOT_PART="${DISK}2"
+fi
 
-# Генерация fstab с правильными опциями Btrfs
-echo "Генерация fstab..."
-genfstab -U /mnt > /mnt/etc/fstab
-sed -i 's/subvolid=.*,subvol=\/@/subvol=\/@,noatime,compress=zstd,space_cache=v2/' /mnt/etc/fstab
+### Выбор часового пояса ###
+echo -e "\n\033[1;32m=== ВЫБОР ЧАСОВОГО ПОЯСА ===\033[0m"
+echo -e "\033[1;33mВыберите регион:\033[0m"
+PS3="> "
+REGIONS=($(timedatectl list-timezones | cut -d'/' -f1 | sort -u))
+select REGION in "${REGIONS[@]}"; do
+    [[ -n $REGION ]] && break || echo -e "\033[1;31mНеверный выбор!\033[0m"
+done
 
-# Chroot и настройка системы
-echo "Настройка системы..."
-arch-chroot /mnt /bin/bash <<EOF
+echo -e "\n\033[1;33mВыберите город:\033[0m"
+CITIES=($(timedatectl list-timezones | grep "^$REGION/" | cut -d'/' -f2))
+select CITY in "${CITIES[@]}"; do
+    [[ -n $CITY ]] && break || echo -e "\033[1;31mНеверный выбор!\033[0m"
+done
 
-# Настройка pacman.conf
-echo "Настройка pacman.conf..."
-#sed -i 's/^#Color/Color/' /etc/pacman.conf
-sed -i 's/^#VerbosePkgLists/VerbosePkgLists/' /etc/pacman.conf
-sed -i 's/^#ParallelDownloads = 5/ParallelDownloads = 5/' /etc/pacman.conf
-#echo -e "\n# Дополнительные настройки\nILoveCandy" >> /etc/pacman.conf
+TIMEZONE="$REGION/$CITY"
+echo -e "\n\033[1;32mВыбран часовой пояс: \033[1;33m$TIMEZONE\033[0m"
 
-# Разблокировка multilib
-echo "Разблокировка multilib..."
-sed -i '/^#\[multilib\]/,/^#Include/ s/^#//' /etc/pacman.conf
-pacman -Sy --noconfirm &> /dev/null
+### Настройки локализации ###
+LOCALE="ru_RU.UTF-8"
+KEYMAP="ru"
+HOSTNAME="archlinux"
 
+### Ввод пользователя ###
+echo -e "\n\033[1;32m=== СОЗДАНИЕ ПОЛЬЗОВАТЕЛЯ ===\033[0m"
+while true; do
+    read -p "Введите имя пользователя (латинскими буквами): " USERNAME
+    if [[ "$USERNAME" =~ ^[a-z_][a-z0-9_-]*$ ]]; then
+        break
+    else
+        echo -e "\033[1;31mОшибка: используйте только латинские буквы, цифры и подчеркивание!\033[0m"
+    fi
+done
 
-# Настройка sudo
-echo "Настройка sudo..."
-echo "%wheel ALL=(ALL) ALL" >> /etc/sudoers
-useradd -m -G wheel,storage,power,network,video,audio,input -s /bin/bash "$username"
+### Разметка диска ###
+echo -e "\n\033[1;32m=== РАЗМЕТКА ДИСКА ===\033[0m"
+echo -e "\033[1;33mСоздание разделов на $DISK...\033[0m"
+parted -s "$DISK" mklabel gpt
+parted -s "$DISK" mkpart primary fat32 1MiB 513MiB
+parted -s "$DISK" set 1 esp on
+parted -s "$DISK" mkpart primary btrfs 513MiB 100%
 
+### Форматирование ###
+echo -e "\n\033[1;33mФорматирование разделов...\033[0m"
+mkfs.fat -F32 "$EFI_PART"
+mkfs.btrfs -f "$ROOT_PART"
 
-# Установка и настройка GRUB
-echo "Установка GRUB..."
-pacman -S --noconfirm grub efibootmgr &> /dev/null
-grub-install --target=x86_64-efi --efi-directory=/boot/efi --bootloader-id=ARCH --no-nvram --removable &> /dev/null
-grub-mkconfig -o /boot/grub/grub.cfg &> /dev/null
+### Создание структуры Btrfs ###
+echo -e "\n\033[1;33mСоздание Btrfs-субвьюмов...\033[0m"
+mount "$ROOT_PART" /mnt
+btrfs subvolume create /mnt/@
+btrfs subvolume create /mnt/@home
+btrfs subvolume create /mnt/@var
+btrfs subvolume create /mnt/@.snapshots
+btrfs subvolume create /mnt/@log
+btrfs subvolume create /mnt/@pkg
 
-# Настройка локали и времени
-echo "en_US.UTF-8 UTF-8" >> /etc/locale.gen
-echo "ru_RU.UTF-8 UTF-8" >> /etc/locale.gen
-echo "LANG=en_US.UTF-8" > /etc/locale.conf
-locale-gen &> /dev/null
+### Монтирование ###
+umount /mnt
+echo -e "\n\033[1;33mМонтирование разделов...\033[0m"
+mount -o noatime,compress=zstd,space_cache=v2,subvol=@ "$ROOT_PART" /mnt
+mkdir -p /mnt/{boot/efi,home,var,.snapshots,var/log,var/cache/pacman/pkg}
+mount "$EFI_PART" /mnt/boot/efi
+mount -o noatime,compress=zstd,space_cache=v2,subvol=@home "$ROOT_PART" /mnt/home
+mount -o noatime,compress=zstd,space_cache=v2,subvol=@var "$ROOT_PART" /mnt/var
+mount -o noatime,compress=zstd,space_cache=v2,subvol=@.snapshots "$ROOT_PART" /mnt/.snapshots
+mount -o noatime,compress=zstd,space_cache=v2,subvol=@log "$ROOT_PART" /mnt/var/log
+mount -o noatime,compress=zstd,space_cache=v2,subvol=@pkg "$ROOT_PART" /mnt/var/cache/pacman/pkg
 
-# Установка часового пояса (пример для Москвы)
-ln -sf /usr/share/zoneinfo/Europe/Moscow /etc/localtime
+### Установка системы ###
+echo -e "\n\033[1;32m=== УСТАНОВКА СИСТЕМЫ ===\033[0m"
+echo -e "\033[1;33mУстановка базовых пакетов...\033[0m"
+pacstrap /mnt base base-devel linux linux-firmware btrfs-progs grub efibootmgr networkmanager nano sudo terminus-font
+
+### Fstab ###
+echo -e "\n\033[1;33mГенерация fstab...\033[0m"
+genfstab -U /mnt >> /mnt/etc/fstab
+
+### Chroot-настройка ###
+echo -e "\n\033[1;32m=== НАСТРОЙКА СИСТЕМЫ ===\033[0m"
+arch-chroot /mnt <<EOF
+# Часовой пояс
+ln -sf /usr/share/zoneinfo/$TIMEZONE /etc/localtime
 hwclock --systohc
 
-# Установка сетевых утилит
-pacman -S --noconfirm networkmanager &> /dev/null
-systemctl enable NetworkManager &> /dev/null
+# Русская локализация
+echo "ru_RU.UTF-8 UTF-8" > /etc/locale.gen
+echo "ru_RU ISO-8859-5" >> /etc/locale.gen
+echo "en_US.UTF-8 UTF-8" >> /etc/locale.gen
+echo "LANG=$LOCALE" > /etc/locale.conf
+echo "KEYMAP=$KEYMAP" > /etc/vconsole.conf
+echo "FONT=ter-v16n" >> /etc/vconsole.conf
+locale-gen
 
-# Установка Xorg и KDE Plasma
-echo "Установка KDE Plasma..."
-pacman -S --noconfirm plasma sddm sddm-kcm plasma-nm &> /dev/null
+# Настройка консоли
+echo "COLORTERM=truecolor" >> /etc/environment
+echo "TERM=xterm-256color" >> /etc/environment
 
-# Включение SDDM (менеджер входа KDE)
-systemctl enable sddm &> /dev/null
+# Сеть
+echo "$HOSTNAME" > /etc/hostname
+echo "127.0.1.1 $HOSTNAME.localdomain $HOSTNAME" >> /etc/hosts
 
-# Установка дополнительных полезных пакетов
-pacman -S --noconfirm konsole dolphin firefox ark kate gwenview spectacle
-          pipewire pipewire-pulse pipewire-alsa wireplumber
-          ffmpegthumbs
-          ntfs-3g exfat-utils bash-completion &> /dev/null
+# Initramfs
+sed -i 's/^HOOKS=.*/HOOKS=(base systemd autodetect modconf block filesystems keyboard fsck btrfs)/' /etc/mkinitcpio.conf
+mkinitcpio -P
 
-# Установка драйверов (опционально)
-pacman -S --noconfirm mesa amd-ucode &> /dev/null
+# Загрузчик
+grub-install --target=x86_64-efi --efi-directory=/boot/efi --bootloader-id=GRUB
+grub-mkconfig -o /boot/grub/grub.cfg
 
+# Пароль root
+echo -e "\n\033[1;33mУстановка пароля для root:\033[0m"
+passwd
 
-# Обновление системы
-echo "Обновление системы..."
-pacman -Syu --noconfirm &> /dev/null
+# Пользователь
+useradd -m -G wheel,storage,power -s /bin/bash "$USERNAME"
+echo -e "\n\033[1;33mУстановка пароля для $USERNAME:\033[0m"
+passwd "$USERNAME"
+
+# Sudo
+echo "%wheel ALL=(ALL) ALL" >> /etc/sudoers
+
+# Дополнительные пакеты
+pacman -S --noconfirm ntfs-3g exfat-utils firefox firefox-i18n-ru ttf-dejavu ttf-liberation noto-fonts-cjk noto-fonts-emoji
+
+# Включение NetworkManager
+systemctl enable NetworkManager
+
+# Улучшенная поддержка шрифтов в консоли
+systemctl enable setfont.service
 EOF
 
-progress_bar 15
-
-# Завершение установки
-umount -R /mnt
-echo "Установка завершена!"
-echo "----------------------------------------"
-echo "Имя пользователя: $username"
-echo "----------------------------------------"
-reboot
+### Завершение ###
+echo -e "\n\033[1;32m=== УСТАНОВКА ЗАВЕРШЕНА ===\033[0m"
+echo -e "\033[1;33m1. Размонтируйте разделы:\033[0m umount -R /mnt"
+echo -e "\033[1;33m2. Перезагрузитесь:\033[0m reboot"
+echo -e "\033[1;33m3. После входа установите графическую среду при необходимости\033[0m"
+echo -e "\033[1;32mСистема готова к использованию с поддержкой кириллицы!\033[0m"
