@@ -94,7 +94,7 @@ btrfs subvolume create /mnt/@pkg
 ### Монтирование ###
 umount /mnt
 echo -e "\n\033[1;33mМонтирование разделов...\033[0m"
-mount -o noatime,compress=zstd,space_cache=v2,subvol=@ "$ROOT_PART" /mnt
+mount -o noatime,compress=lzo,space_cache=v2,ssd,subvol=@ "$ROOT_PART" /mnt
 mkdir -p /mnt/{boot/efi,home,var,.snapshots,var/log,var/cache/pacman/pkg}
 mount "$EFI_PART" /mnt/boot/efi
 mount -o noatime,compress=zstd,space_cache=v2,subvol=@home "$ROOT_PART" /mnt/home
@@ -114,7 +114,8 @@ genfstab -U /mnt >> /mnt/etc/fstab
 
 ### Chroot-настройка ###
 echo -e "\n\033[1;32m=== НАСТРОЙКА СИСТЕМЫ ===\033[0m"
-arch-chroot /mnt <<EOF
+
+arch-chroot /mnt
 # Часовой пояс
 ln -sf /usr/share/zoneinfo/$TIMEZONE /etc/localtime
 hwclock --systohc
@@ -125,7 +126,7 @@ echo "ru_RU ISO-8859-5" >> /etc/locale.gen
 echo "en_US.UTF-8 UTF-8" >> /etc/locale.gen
 echo "LANG=$LOCALE" > /etc/locale.conf
 echo "KEYMAP=$KEYMAP" > /etc/vconsole.conf
-echo "FONT=ter-v16n" >> /etc/vconsole.conf
+echo "FONT=cyr-sun16" >> /etc/vconsole.conf
 locale-gen
 
 # Настройка консоли
@@ -157,18 +158,16 @@ passwd "$USERNAME"
 echo "%wheel ALL=(ALL) ALL" >> /etc/sudoers
 
 # Дополнительные пакеты
-pacman -S --noconfirm ntfs-3g exfat-utils firefox firefox-i18n-ru ttf-dejavu ttf-liberation noto-fonts-cjk noto-fonts-emoji
+pacman -S --noconfirm ntfs-3g firefox firefox-i18n-ru ttf-liberation noto-fonts-cjk noto-fonts-emoji
 
 # Включение NetworkManager
 systemctl enable NetworkManager
 
-# Улучшенная поддержка шрифтов в консоли
-systemctl enable setfont.service
-EOF
-
 ### Завершение ###
 echo -e "\n\033[1;32m=== УСТАНОВКА ЗАВЕРШЕНА ===\033[0m"
-echo -e "\033[1;33m1. Размонтируйте разделы:\033[0m umount -R /mnt"
-echo -e "\033[1;33m2. Перезагрузитесь:\033[0m reboot"
-echo -e "\033[1;33m3. После входа установите графическую среду при необходимости\033[0m"
-echo -e "\033[1;32mСистема готова к использованию с поддержкой кириллицы!\033[0m"
+
+echo -e "\033[1;33m1. Размонтируем разделы\033[0m"
+umount -R /mnt
+
+echo -e "\033[1;33m2. Перезагрузка\033[0m"
+reboot
